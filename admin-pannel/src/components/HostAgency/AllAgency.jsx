@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import logoImg from '../../assets/logo.png';
 
 /* ══════════════════════════════════════════════
    CONSTANTS & HELPERS
@@ -203,281 +204,408 @@ const FullPageOverlay = ({ agent, members, membersLoading, onClose, showToast })
 
 
   // ==============================pdf start ==================================
-  
   const exportPDF = async () => {
+  try {
+    const doc   = new jsPDF('l', 'mm', 'a4');
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 14;
+
+    /* ── COLORS ── */
+    const DARK      = [15,  23,  42];
+    const BLUE      = [37,  99,  235];
+    const WHITE     = [255, 255, 255];
+    const LIGHT_BG  = [241, 245, 249];
+    const MUTED     = [100, 116, 135];
+    const TEXT_DARK = [30,  41,  59];
+    const DIVIDER   = [203, 213, 225];
+    const GREEN     = [5,   150, 105];
+
+    /* ── SAFE TEXT ── */
+    const safe = (str) =>
+      String(str || '').replace(/[^\x00-\x7F]/g, '').trim();
+
+    const safeName       = safe(agentName)                || 'Agent';
+    const safeUser       = safe(agentUser)                || 'unknown';
+    const safeEmail      = safe(agentEmail)               || '—';
+    const safeAgencyName = safe(agent.get('agency_name')) || '—';
+    const safeAgentUid   = safe(String(agentUid || '—'));
+    const safeJoined     = agent.get('createdAt')
+      ? agent.get('createdAt').toLocaleDateString('en-GB', {
+          day: '2-digit', month: 'short', year: 'numeric',
+        })
+      : '—';
+
+    /* ── LOAD LOGO FOR WATERMARK ── */
+    let logoBase64 = null;
     try {
-      const doc = new jsPDF('l', 'mm', 'a4');
-      const pageW = doc.internal.pageSize.getWidth();
-      const pageH = doc.internal.pageSize.getHeight();
-      const margin = 14;
+      const logoResponse = await fetch(logoImg);
+      if (logoResponse.ok) {
+        const logoBlob = await logoResponse.blob();
+        logoBase64 = await new Promise((res, rej) => {
+          const reader     = new FileReader();
+          reader.onloadend = () => res(reader.result);
+          reader.onerror   = rej;
+          reader.readAsDataURL(logoBlob);
+        });
+      }
+    } catch (logoErr) {
+      console.warn('Logo load failed:', logoErr.message);
+    }
 
-      /* ── COLORS ── */
-      const DARK      = [15,  23,  42];   // header bg
-      const BLUE      = [37,  99,  235];  // accent bar
-      const WHITE     = [255, 255, 255];
-      const LIGHT_BG  = [241, 245, 249];  // info block bg
-      const MUTED     = [100, 116, 135];
-      const TEXT_DARK = [30,  41,  59];
-      const DIVIDER   = [203, 213, 225];
+    /* ── WATERMARK HELPER (called per page) ── */
+    const drawWatermark = () => {
+      if (!logoBase64) return;
+      try {
+        const wmW = 110;
+        const wmH = 110;
+        const wmX = (pageW - wmW) / 2;
+        const wmY = (pageH - wmH) / 2;
+        doc.saveGraphicsState();
+        doc.setGState(doc.GState({ opacity: 0.20 }));
+        doc.addImage(logoBase64, 'PNG', wmX, wmY, wmW, wmH);
+        doc.restoreGraphicsState();
+      } catch (e) {
+        console.warn('Watermark draw failed:', e.message);
+      }
+    };
 
-      /* ══════════════════════════════
-        HEADER BAND
-      ══════════════════════════════ */
-      // Dark top band
-      doc.setFillColor(...DARK);
-      doc.rect(0, 0, pageW, 22, 'F');
+    /* ══════════════════════════════
+       PAGE 1 WATERMARK
+    ══════════════════════════════ */
+    drawWatermark();
 
-      // Blue left accent bar
+    /* ══════════════════════════════
+       HEADER BAND
+    ══════════════════════════════ */
+    doc.setFillColor(...DARK);
+    doc.rect(0, 0, pageW, 22, 'F');
+
+    doc.setFillColor(...BLUE);
+    doc.rect(0, 0, 5, 22, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(...WHITE);
+    doc.text('AGENCY REPORT', margin + 4, 14);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(180, 190, 210);
+    const now = new Date().toLocaleString('en-GB', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    doc.text(`Generated: ${now}`, pageW - margin, 14, { align: 'right' });
+
+    /* ══════════════════════════════
+       AVATAR
+    ══════════════════════════════ */
+    let currentY = 30;
+
+    const drawInitials = () => {
       doc.setFillColor(...BLUE);
-      doc.rect(0, 0, 5, 22, 'F');
-
-      // Report title (white)
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(13);
+      doc.circle(margin + 10, currentY + 10, 10, 'F');
       doc.setTextColor(...WHITE);
-      doc.text('AGENCY REPORT', margin + 4, 14);
-
-      // Generated date (right side)
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.5);
-      doc.setTextColor(180, 190, 210);
-      const now = new Date().toLocaleString('en-GB', {
-        day: '2-digit', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: false
-      });
-      doc.text(`Generated: ${now}`, pageW - margin, 14, { align: 'right' });
-
-      /* ══════════════════════════════
-        AVATAR (try to embed)
-      ══════════════════════════════ */
-      let currentY = 30;
-
-      if (avatarUrl) {
-        try {
-          const img = new Image();
-          img.crossOrigin = 'anonymous';
-          await new Promise((res, rej) => {
-            img.onload = res; img.onerror = rej;
-            img.src = avatarUrl;
-          });
-          const canvas = document.createElement('canvas');
-          canvas.width = 80; canvas.height = 80;
-          const ctx = canvas.getContext('2d');
-          // Circle clip
-          ctx.beginPath();
-          ctx.arc(40, 40, 40, 0, Math.PI * 2);
-          ctx.clip();
-          ctx.drawImage(img, 0, 0, 80, 80);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-          doc.addImage(dataUrl, 'JPEG', margin, currentY, 20, 20);
-        } catch (_) {
-          // avatar failed — draw initials circle
-          doc.setFillColor(...BLUE);
-          doc.circle(margin + 10, currentY + 10, 10, 'F');
-          doc.setTextColor(...WHITE);
-          doc.setFont('helvetica', 'bold');
-          doc.setFontSize(9);
-          doc.text(getInitials(agentName), margin + 10, currentY + 11.5, { align: 'center' });
-        }
-      } else {
-        // No avatar — draw initials circle
-        doc.setFillColor(...BLUE);
-        doc.circle(margin + 10, currentY + 10, 10, 'F');
-        doc.setTextColor(...WHITE);
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        doc.text(getInitials(agentName), margin + 10, currentY + 11.5, { align: 'center' });
-      }
-
-      /* ══════════════════════════════
-        AGENT NAME + USERNAME
-        (right of avatar)
-      ══════════════════════════════ */
-      const nameX = margin + 24;
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(14);
-      doc.setTextColor(...TEXT_DARK);
-      doc.text(agentName, nameX, currentY + 8);
-
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8.5);
-      doc.setTextColor(...MUTED);
-      doc.text(`@${agentUser}`, nameX, currentY + 14);
-
-      /* ══════════════════════════════
-        INFO BLOCK (grey box)
-      ══════════════════════════════ */
-      const infoY      = currentY + 25;
-      const infoH      = 28;
-      const infoW      = pageW - margin * 2;
-      const colW       = infoW / 5;
-
-      // Light grey background
-      doc.setFillColor(...LIGHT_BG);
-      doc.roundedRect(margin, infoY, infoW, infoH, 2, 2, 'F');
-
-      // Top blue stripe on info block
-      doc.setFillColor(...BLUE);
-      doc.roundedRect(margin, infoY, infoW, 3, 1, 1, 'F');
-
-      // Info items
-      const infoItems = [
-        { label: 'UID',             value: String(agentUid || '—') },
-        { label: 'Agency Name',     value: agent.get('agency_name') || '—' },
-        { label: 'Email',           value: agentEmail },
-        { label: 'Total Hosts',     value: String(totalHosts) },
-        { label: 'Agency Earning',  value: fmt(totalEarning) + ' diamonds' },
-      ];
-
-      infoItems.forEach((item, i) => {
-        const x = margin + colW * i + colW / 2;
-        const isHighlight = i >= 3; // last 2 items get accent color
-
-        // Label
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6.5);
-        doc.setTextColor(...MUTED);
-        doc.text(item.label.toUpperCase(), x, infoY + 9, { align: 'center' });
-
-        // Value
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        doc.setTextColor(isHighlight ? BLUE[0] : TEXT_DARK[0], isHighlight ? BLUE[1] : TEXT_DARK[1], isHighlight ? BLUE[2] : TEXT_DARK[2]);
-        doc.text(item.value, x, infoY + 17, { align: 'center' });
-      });
-
-      // Vertical dividers between info items
-      doc.setDrawColor(...DIVIDER);
-      doc.setLineWidth(0.3);
-      for (let i = 1; i < 5; i++) {
-        const lx = margin + colW * i;
-        doc.line(lx, infoY + 5, lx, infoY + infoH - 5);
-      }
-
-      /* ══════════════════════════════
-        SECTION TITLE — Hosts
-      ══════════════════════════════ */
-      const tableStartY = infoY + infoH + 8;
-
-      doc.setFillColor(...BLUE);
-      doc.rect(margin, tableStartY, 3, 6, 'F');
-
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(9);
-      doc.setTextColor(...TEXT_DARK);
-      doc.text('HOST DETAILS', margin + 6, tableStartY + 4.5);
+      const initials = safeName
+        .split(' ')
+        .filter(Boolean)
+        .map(w => w[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase() || '?';
+      doc.text(initials, margin + 10, currentY + 11.5, { align: 'center' });
+    };
+
+    if (avatarUrl) {
+      try {
+        /* Method 1 — fetch as blob */
+        const controller = new AbortController();
+        const timeout    = setTimeout(() => controller.abort(), 8000);
+        const response   = await fetch(avatarUrl, {
+          signal: controller.signal,
+          mode:   'cors',
+          cache:  'no-cache',
+        });
+        clearTimeout(timeout);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const blob   = await response.blob();
+        const base64 = await new Promise((res, rej) => {
+          const reader     = new FileReader();
+          reader.onloadend = () => res(reader.result);
+          reader.onerror   = rej;
+          reader.readAsDataURL(blob);
+        });
+
+        const img = new Image();
+        await new Promise((res, rej) => {
+          img.onload  = res;
+          img.onerror = rej;
+          img.src     = base64;
+        });
+
+        const size   = 160;
+        const canvas = document.createElement('canvas');
+        canvas.width  = size;
+        canvas.height = size;
+        const ctx    = canvas.getContext('2d');
+        ctx.beginPath();
+        ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(img, 0, 0, size, size);
+
+        const cropped = canvas.toDataURL('image/jpeg', 0.95);
+        doc.addImage(cropped, 'JPEG', margin, currentY, 22, 22);
+
+      } catch (err) {
+        console.warn('Avatar method 1 failed:', err.message);
+        try {
+          /* Method 2 — crossOrigin img */
+          const img2 = new Image();
+          img2.crossOrigin = 'anonymous';
+          await new Promise((res, rej) => {
+            img2.onload  = res;
+            img2.onerror = rej;
+            setTimeout(rej, 5000);
+            img2.src = avatarUrl + '?t=' + Date.now();
+          });
+
+          const size2   = 160;
+          const canvas2 = document.createElement('canvas');
+          canvas2.width  = size2;
+          canvas2.height = size2;
+          const ctx2    = canvas2.getContext('2d');
+          ctx2.beginPath();
+          ctx2.arc(size2 / 2, size2 / 2, size2 / 2, 0, Math.PI * 2);
+          ctx2.closePath();
+          ctx2.clip();
+          ctx2.drawImage(img2, 0, 0, size2, size2);
+
+          const cropped2 = canvas2.toDataURL('image/jpeg', 0.95);
+          doc.addImage(cropped2, 'JPEG', margin, currentY, 22, 22);
+
+        } catch (err2) {
+          console.warn('Avatar method 2 failed:', err2.message);
+          drawInitials();
+        }
+      }
+    } else {
+      drawInitials();
+    }
+
+    /* ══════════════════════════════
+       AGENT NAME + INFO
+    ══════════════════════════════ */
+    const nameX = margin + 26;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.setTextColor(...TEXT_DARK);
+    doc.text(safeName, nameX, currentY + 7);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(...MUTED);
+    doc.text(`@${safeUser}`, nameX, currentY + 13);
+
+    doc.setFontSize(7.5);
+    doc.setTextColor(...MUTED);
+    doc.text(`Joined: ${safeJoined}`, nameX, currentY + 19);
+
+    /* ══════════════════════════════
+       INFO BLOCK
+    ══════════════════════════════ */
+    const infoY = currentY + 26;
+    const infoH = 28;
+    const infoW = pageW - margin * 2;
+    const colW  = infoW / 5;
+
+    doc.setFillColor(...LIGHT_BG);
+    doc.roundedRect(margin, infoY, infoW, infoH, 2, 2, 'F');
+
+    doc.setFillColor(...BLUE);
+    doc.roundedRect(margin, infoY, infoW, 3, 1, 1, 'F');
+
+    const infoItems = [
+      { label: 'UID',            value: safeAgentUid,                    highlight: false },
+      { label: 'Agency Name',    value: safeAgencyName,                  highlight: false },
+      { label: 'Email',          value: safeEmail,                       highlight: false },
+      { label: 'Total Hosts',    value: String(totalHosts),              highlight: true  },
+      { label: 'Agency Earning', value: fmt(totalEarning) + ' diamonds', highlight: true  },
+    ];
+
+    infoItems.forEach((item, i) => {
+      const x = margin + colW * i + colW / 2;
 
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.5);
+      doc.setFontSize(6.5);
       doc.setTextColor(...MUTED);
-      doc.text(`${sorted.length} record(s)`, pageW - margin, tableStartY + 4.5, { align: 'right' });
+      doc.text(item.label.toUpperCase(), x, infoY + 9, { align: 'center' });
 
-      /* ══════════════════════════════
-        HOST TABLE
-      ══════════════════════════════ */
-      autoTable(doc, {
-        startY: tableStartY + 9,
-        margin: { left: margin, right: margin },
-        head: [[
-          'No.',
-          'Host UID',
-          'Object ID',
-          'Host Name',
-          'Live Duration',
-          'Audio Duration',
-          'Diamonds',
-          'Joined Date',
-        ]],
-        body: sorted.map((m, idx) => {
-          const h  = m.get('host');
-          const ca = m.get('createdAt');
-          return [
-            idx + 1,
-            h?.get('uid')  || '—',
-            h?.id          || '—',
-            h?.get('name') || '—',
-            fmtDur(m.get('livestream_duration_day'), m.get('livestream_duration_minute')),
-            fmtDur(m.get('audio_duration_day'),      m.get('audio_duration_minute')),
-            Number(h?.get('diamonds') || 0).toLocaleString(),
-            ca ? ca.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : '—',
-          ];
-        }),
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(item.value.length > 20 ? 7 : 9);
+      doc.setTextColor(
+        item.highlight ? BLUE[0] : TEXT_DARK[0],
+        item.highlight ? BLUE[1] : TEXT_DARK[1],
+        item.highlight ? BLUE[2] : TEXT_DARK[2],
+      );
+      doc.text(item.value, x, infoY + 19, { align: 'center' });
+    });
 
-        /* ── Head style ── */
-        headStyles: {
-          fillColor:  BLUE,
-          textColor:  WHITE,
-          fontStyle:  'bold',
-          fontSize:   7.5,
-          cellPadding: { top: 4, bottom: 4, left: 3, right: 3 },
-          halign: 'left',
-        },
-
-        /* ── Body style ── */
-        bodyStyles: {
-          fontSize:    7.5,
-          textColor:   TEXT_DARK,
-          cellPadding: { top: 3.5, bottom: 3.5, left: 3, right: 3 },
-          lineColor:   DIVIDER,
-          lineWidth:   0.2,
-        },
-
-        /* ── Alternating rows ── */
-        alternateRowStyles: {
-          fillColor: [248, 250, 252],
-        },
-
-        /* ── Column widths ── */
-        columnStyles: {
-          0: { cellWidth: 10, halign: 'center', textColor: MUTED },  // No.
-          1: { cellWidth: 20, fontStyle: 'bold' },                    // Host UID
-          2: { cellWidth: 28, textColor: MUTED, fontSize: 6.5 },     // Object ID
-          3: { cellWidth: 'auto' },                                   // Name
-          4: { cellWidth: 24, halign: 'center' },                    // Live
-          5: { cellWidth: 24, halign: 'center' },                    // Audio
-          6: { cellWidth: 22, halign: 'right',  fontStyle: 'bold', textColor: [5, 150, 105] }, // Diamonds
-          7: { cellWidth: 26, halign: 'center', textColor: MUTED },  // Date
-        },
-
-        /* ── Page break header repeat ── */
-        showHead: 'everyPage',
-
-        /* ── Footer on each page ── */
-        didDrawPage: (data) => {
-          const pn    = doc.internal.getNumberOfPages();
-          const curPg = data.pageNumber;
-
-          // Footer line
-          doc.setDrawColor(...DIVIDER);
-          doc.setLineWidth(0.3);
-          doc.line(margin, pageH - 10, pageW - margin, pageH - 10);
-
-          // Footer left — agency name
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(7);
-          doc.setTextColor(...MUTED);
-          doc.text(
-            `Agency: ${agent.get('agency_name') || '—'}  |  Agent UID: ${agentUid}`,
-            margin, pageH - 6
-          );
-
-          // Footer right — page number
-          doc.text(`Page ${curPg} of ${pn}`, pageW - margin, pageH - 6, { align: 'right' });
-        },
-      });
-
-      /* ══════════════════════════════
-        SAVE
-      ══════════════════════════════ */
-      const agencySlug = (agent.get('agency_name') || 'Agency').replace(/\s+/g, '_');
-      doc.save(`${agencySlug}_Report_${agentUid}.pdf`);
-      showToast('PDF exported successfully!');
-
-    } catch (e) {
-      showToast('PDF failed: ' + e.message, 'error');
+    /* vertical dividers */
+    doc.setDrawColor(...DIVIDER);
+    doc.setLineWidth(0.3);
+    for (let i = 1; i < 5; i++) {
+      const lx = margin + colW * i;
+      doc.line(lx, infoY + 5, lx, infoY + infoH - 5);
     }
-  };
+
+    /* ══════════════════════════════
+       SECTION TITLE
+    ══════════════════════════════ */
+    const tableStartY = infoY + infoH + 8;
+
+    doc.setFillColor(...BLUE);
+    doc.rect(margin, tableStartY, 3, 6, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...TEXT_DARK);
+    doc.text('HOST DETAILS', margin + 6, tableStartY + 4.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(...MUTED);
+    doc.text(
+      `${sorted.length} record(s)`,
+      pageW - margin, tableStartY + 4.5, { align: 'right' },
+    );
+
+    /* ══════════════════════════════
+       HOST TABLE
+    ══════════════════════════════ */
+    autoTable(doc, {
+      startY: tableStartY + 9,
+      margin: { left: margin, right: margin },
+
+      head: [[
+        'No.',
+        'Host UID',
+        'Object ID',
+        'Host Name',
+        'Live Duration',
+        'Audio Duration',
+        'Diamonds',
+        'Joined Date',
+      ]],
+
+      body: sorted.map((m, idx) => {
+        const h  = m.get('host');
+        const ca = m.get('createdAt');
+        return [
+          idx + 1,
+          safe(String(h?.get('uid') || '—')),
+          safe(h?.id || '—'),
+          safe(h?.get('name') || '—') || '—',
+          fmtDur(
+            m.get('livestream_duration_day')    || 0,
+            m.get('livestream_duration_minute') || 0,
+          ),
+          fmtDur(
+            m.get('audio_duration_day')    || 0,
+            m.get('audio_duration_minute') || 0,
+          ),
+          Number(h?.get('diamonds') || 0).toLocaleString(),
+          ca
+            ? ca.toLocaleDateString('en-GB', {
+                day: '2-digit', month: 'short', year: 'numeric',
+              })
+            : '—',
+        ];
+      }),
+
+      headStyles: {
+        fillColor:   BLUE,
+        textColor:   WHITE,
+        fontStyle:   'bold',
+        fontSize:    7.5,
+        cellPadding: { top: 4, bottom: 4, left: 3, right: 3 },
+        halign:      'left',
+      },
+
+      bodyStyles: {
+        fontSize:    7.5,
+        textColor:   TEXT_DARK,
+        cellPadding: { top: 3.5, bottom: 3.5, left: 3, right: 3 },
+        lineColor:   DIVIDER,
+        lineWidth:   0.2,
+      },
+
+      alternateRowStyles: {
+        fillColor: [248, 250, 252],
+      },
+
+      columnStyles: {
+        0: { cellWidth: 10,     halign: 'center', textColor: MUTED },
+        1: { cellWidth: 20,     fontStyle: 'bold' },
+        2: { cellWidth: 28,     textColor: MUTED,  fontSize: 6.5 },
+        3: { cellWidth: 'auto' },
+        4: { cellWidth: 24,     halign: 'center' },
+        5: { cellWidth: 24,     halign: 'center' },
+        6: { cellWidth: 24,     halign: 'right',  fontStyle: 'bold', textColor: GREEN },
+        7: { cellWidth: 26,     halign: 'center', textColor: MUTED },
+      },
+
+      showHead: 'everyPage',
+
+      /* ── watermark + footer on every page ── */
+      didDrawPage: (data) => {
+        const totalPg = doc.internal.getNumberOfPages();
+        const curPg   = data.pageNumber;
+
+        /* watermark on page 2+ */
+        if (curPg > 1) {
+          drawWatermark();
+        }
+
+        /* footer line */
+        doc.setDrawColor(...DIVIDER);
+        doc.setLineWidth(0.3);
+        doc.line(margin, pageH - 10, pageW - margin, pageH - 10);
+
+        /* footer text left */
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(...MUTED);
+        doc.text(
+          `Agency: ${safeAgencyName}  |  Agent UID: ${safeAgentUid}  |  Agent: ${safeName}`,
+          margin, pageH - 6,
+        );
+
+        /* footer text right */
+        doc.text(
+          `Page ${curPg} of ${totalPg}`,
+          pageW - margin, pageH - 6, { align: 'right' },
+        );
+      },
+    });
+
+    /* ══════════════════════════════
+       SAVE
+    ══════════════════════════════ */
+    const slug = safeAgencyName.replace(/\s+/g, '_') || 'Agency';
+    doc.save(`${slug}_Report_${safeAgentUid}.pdf`);
+    showToast('PDF exported successfully!');
+
+  } catch (e) {
+    console.error('exportPDF error:', e);
+    showToast('PDF failed: ' + e.message, 'error');
+  }
+};
 
 // ==============================pdf end ==================================
 
