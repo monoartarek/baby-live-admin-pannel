@@ -201,31 +201,286 @@ const FullPageOverlay = ({ agent, members, membersLoading, onClose, showToast })
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
   };
 
-  const exportPDF = () => {
+
+  // ==============================pdf start ==================================
+  
+  const exportPDF = async () => {
     try {
       const doc = new jsPDF('l', 'mm', 'a4');
-      doc.setFontSize(16); doc.setFont('helvetica', 'bold');
-      doc.text(`Agency Report: ${agent.get('agency_name') || '—'}`, 14, 16);
-      doc.setFontSize(9); doc.setFont('helvetica', 'normal'); doc.setTextColor(80);
-      doc.text(`UID: ${agent.get('uid')}  |  Hosts: ${totalHosts}  |  Total Earning: ${fmt(totalEarning)}  |  ${new Date().toLocaleString()}`, 14, 23);
-      autoTable(doc, {
-        head: [['Host UID','Host Name','Live Duration','Audio Duration','Diamonds','Created At']],
-        body: sorted.map(m => [
-          m.get('host')?.get('uid') || '—',
-          m.get('host')?.get('name') || '—',
-          fmtDur(m.get('livestream_duration_day'), m.get('livestream_duration_minute')),
-          fmtDur(m.get('audio_duration_day'), m.get('audio_duration_minute')),
-          m.get('host')?.get('diamonds') || 0,
-          m.get('createdAt')?.toLocaleString() || '—',
-        ]),
-        startY: 28, theme: 'striped',
-        headStyles: { fillColor: [59, 130, 246] },
-        styles: { fontSize: 8.5 },
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const margin = 14;
+
+      /* ── COLORS ── */
+      const DARK      = [15,  23,  42];   // header bg
+      const BLUE      = [37,  99,  235];  // accent bar
+      const WHITE     = [255, 255, 255];
+      const LIGHT_BG  = [241, 245, 249];  // info block bg
+      const MUTED     = [100, 116, 135];
+      const TEXT_DARK = [30,  41,  59];
+      const DIVIDER   = [203, 213, 225];
+
+      /* ══════════════════════════════
+        HEADER BAND
+      ══════════════════════════════ */
+      // Dark top band
+      doc.setFillColor(...DARK);
+      doc.rect(0, 0, pageW, 22, 'F');
+
+      // Blue left accent bar
+      doc.setFillColor(...BLUE);
+      doc.rect(0, 0, 5, 22, 'F');
+
+      // Report title (white)
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.setTextColor(...WHITE);
+      doc.text('AGENCY REPORT', margin + 4, 14);
+
+      // Generated date (right side)
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(180, 190, 210);
+      const now = new Date().toLocaleString('en-GB', {
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false
       });
-      doc.save(`Agency_${agent.get('uid')}_Report.pdf`);
-      showToast('PDF exported!');
-    } catch (e) { showToast('PDF failed: ' + e.message, 'error'); }
+      doc.text(`Generated: ${now}`, pageW - margin, 14, { align: 'right' });
+
+      /* ══════════════════════════════
+        AVATAR (try to embed)
+      ══════════════════════════════ */
+      let currentY = 30;
+
+      if (avatarUrl) {
+        try {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          await new Promise((res, rej) => {
+            img.onload = res; img.onerror = rej;
+            img.src = avatarUrl;
+          });
+          const canvas = document.createElement('canvas');
+          canvas.width = 80; canvas.height = 80;
+          const ctx = canvas.getContext('2d');
+          // Circle clip
+          ctx.beginPath();
+          ctx.arc(40, 40, 40, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(img, 0, 0, 80, 80);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          doc.addImage(dataUrl, 'JPEG', margin, currentY, 20, 20);
+        } catch (_) {
+          // avatar failed — draw initials circle
+          doc.setFillColor(...BLUE);
+          doc.circle(margin + 10, currentY + 10, 10, 'F');
+          doc.setTextColor(...WHITE);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9);
+          doc.text(getInitials(agentName), margin + 10, currentY + 11.5, { align: 'center' });
+        }
+      } else {
+        // No avatar — draw initials circle
+        doc.setFillColor(...BLUE);
+        doc.circle(margin + 10, currentY + 10, 10, 'F');
+        doc.setTextColor(...WHITE);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.text(getInitials(agentName), margin + 10, currentY + 11.5, { align: 'center' });
+      }
+
+      /* ══════════════════════════════
+        AGENT NAME + USERNAME
+        (right of avatar)
+      ══════════════════════════════ */
+      const nameX = margin + 24;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.setTextColor(...TEXT_DARK);
+      doc.text(agentName, nameX, currentY + 8);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...MUTED);
+      doc.text(`@${agentUser}`, nameX, currentY + 14);
+
+      /* ══════════════════════════════
+        INFO BLOCK (grey box)
+      ══════════════════════════════ */
+      const infoY      = currentY + 25;
+      const infoH      = 28;
+      const infoW      = pageW - margin * 2;
+      const colW       = infoW / 5;
+
+      // Light grey background
+      doc.setFillColor(...LIGHT_BG);
+      doc.roundedRect(margin, infoY, infoW, infoH, 2, 2, 'F');
+
+      // Top blue stripe on info block
+      doc.setFillColor(...BLUE);
+      doc.roundedRect(margin, infoY, infoW, 3, 1, 1, 'F');
+
+      // Info items
+      const infoItems = [
+        { label: 'UID',             value: String(agentUid || '—') },
+        { label: 'Agency Name',     value: agent.get('agency_name') || '—' },
+        { label: 'Email',           value: agentEmail },
+        { label: 'Total Hosts',     value: String(totalHosts) },
+        { label: 'Agency Earning',  value: fmt(totalEarning) + ' diamonds' },
+      ];
+
+      infoItems.forEach((item, i) => {
+        const x = margin + colW * i + colW / 2;
+        const isHighlight = i >= 3; // last 2 items get accent color
+
+        // Label
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.5);
+        doc.setTextColor(...MUTED);
+        doc.text(item.label.toUpperCase(), x, infoY + 9, { align: 'center' });
+
+        // Value
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9);
+        doc.setTextColor(isHighlight ? BLUE[0] : TEXT_DARK[0], isHighlight ? BLUE[1] : TEXT_DARK[1], isHighlight ? BLUE[2] : TEXT_DARK[2]);
+        doc.text(item.value, x, infoY + 17, { align: 'center' });
+      });
+
+      // Vertical dividers between info items
+      doc.setDrawColor(...DIVIDER);
+      doc.setLineWidth(0.3);
+      for (let i = 1; i < 5; i++) {
+        const lx = margin + colW * i;
+        doc.line(lx, infoY + 5, lx, infoY + infoH - 5);
+      }
+
+      /* ══════════════════════════════
+        SECTION TITLE — Hosts
+      ══════════════════════════════ */
+      const tableStartY = infoY + infoH + 8;
+
+      doc.setFillColor(...BLUE);
+      doc.rect(margin, tableStartY, 3, 6, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(...TEXT_DARK);
+      doc.text('HOST DETAILS', margin + 6, tableStartY + 4.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(...MUTED);
+      doc.text(`${sorted.length} record(s)`, pageW - margin, tableStartY + 4.5, { align: 'right' });
+
+      /* ══════════════════════════════
+        HOST TABLE
+      ══════════════════════════════ */
+      autoTable(doc, {
+        startY: tableStartY + 9,
+        margin: { left: margin, right: margin },
+        head: [[
+          'No.',
+          'Host UID',
+          'Object ID',
+          'Host Name',
+          'Live Duration',
+          'Audio Duration',
+          'Diamonds',
+          'Joined Date',
+        ]],
+        body: sorted.map((m, idx) => {
+          const h  = m.get('host');
+          const ca = m.get('createdAt');
+          return [
+            idx + 1,
+            h?.get('uid')  || '—',
+            h?.id          || '—',
+            h?.get('name') || '—',
+            fmtDur(m.get('livestream_duration_day'), m.get('livestream_duration_minute')),
+            fmtDur(m.get('audio_duration_day'),      m.get('audio_duration_minute')),
+            Number(h?.get('diamonds') || 0).toLocaleString(),
+            ca ? ca.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : '—',
+          ];
+        }),
+
+        /* ── Head style ── */
+        headStyles: {
+          fillColor:  BLUE,
+          textColor:  WHITE,
+          fontStyle:  'bold',
+          fontSize:   7.5,
+          cellPadding: { top: 4, bottom: 4, left: 3, right: 3 },
+          halign: 'left',
+        },
+
+        /* ── Body style ── */
+        bodyStyles: {
+          fontSize:    7.5,
+          textColor:   TEXT_DARK,
+          cellPadding: { top: 3.5, bottom: 3.5, left: 3, right: 3 },
+          lineColor:   DIVIDER,
+          lineWidth:   0.2,
+        },
+
+        /* ── Alternating rows ── */
+        alternateRowStyles: {
+          fillColor: [248, 250, 252],
+        },
+
+        /* ── Column widths ── */
+        columnStyles: {
+          0: { cellWidth: 10, halign: 'center', textColor: MUTED },  // No.
+          1: { cellWidth: 20, fontStyle: 'bold' },                    // Host UID
+          2: { cellWidth: 28, textColor: MUTED, fontSize: 6.5 },     // Object ID
+          3: { cellWidth: 'auto' },                                   // Name
+          4: { cellWidth: 24, halign: 'center' },                    // Live
+          5: { cellWidth: 24, halign: 'center' },                    // Audio
+          6: { cellWidth: 22, halign: 'right',  fontStyle: 'bold', textColor: [5, 150, 105] }, // Diamonds
+          7: { cellWidth: 26, halign: 'center', textColor: MUTED },  // Date
+        },
+
+        /* ── Page break header repeat ── */
+        showHead: 'everyPage',
+
+        /* ── Footer on each page ── */
+        didDrawPage: (data) => {
+          const pn    = doc.internal.getNumberOfPages();
+          const curPg = data.pageNumber;
+
+          // Footer line
+          doc.setDrawColor(...DIVIDER);
+          doc.setLineWidth(0.3);
+          doc.line(margin, pageH - 10, pageW - margin, pageH - 10);
+
+          // Footer left — agency name
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7);
+          doc.setTextColor(...MUTED);
+          doc.text(
+            `Agency: ${agent.get('agency_name') || '—'}  |  Agent UID: ${agentUid}`,
+            margin, pageH - 6
+          );
+
+          // Footer right — page number
+          doc.text(`Page ${curPg} of ${pn}`, pageW - margin, pageH - 6, { align: 'right' });
+        },
+      });
+
+      /* ══════════════════════════════
+        SAVE
+      ══════════════════════════════ */
+      const agencySlug = (agent.get('agency_name') || 'Agency').replace(/\s+/g, '_');
+      doc.save(`${agencySlug}_Report_${agentUid}.pdf`);
+      showToast('PDF exported successfully!');
+
+    } catch (e) {
+      showToast('PDF failed: ' + e.message, 'error');
+    }
   };
+
+// ==============================pdf end ==================================
+
 
   const exportCSV = () => {
     const rows = sorted.map(m => [
