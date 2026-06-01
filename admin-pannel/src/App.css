@@ -26,6 +26,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  
 }
 
 /* The container holding Sidebar + Main Content */
@@ -55,4 +56,9 @@ body {
   .main-content {
     margin-left: 0 !important;
   }
+  .app-wrapper {
+    padding-bottom:25px;
+    background-color:#0a0f24;
+  
+}
 }
